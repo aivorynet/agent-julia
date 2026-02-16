@@ -1,0 +1,14 @@
+# Julia
+Manifest.toml
+
+# Coverage
+lcov.info
+coverage/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db

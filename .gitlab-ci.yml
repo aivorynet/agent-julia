@@ -1,0 +1,15 @@
+image: julia:1.10
+
+stages:
+  - test
+
+test:
+  stage: test
+  script:
+    - julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
+  allow_failure: true
+
+.publish_note:
+  script:
+    - echo "Julia packages are published via Julia General Registry"
+    - echo "Use RegistryCI.jl to create registration PR when ready"
