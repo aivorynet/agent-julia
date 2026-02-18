@@ -14,7 +14,7 @@ jobs:
           version: '1.10'
       - uses: julia-actions/cache@v2
       - run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
-      - run: julia --project=. -e 'using Pkg; Pkg.test()'
+      - run: julia --project=. test/runtests.jl
   release:
     runs-on: ubuntu-latest
     needs: ci
