@@ -158,7 +158,7 @@ function authenticate!(conn::BackendConnection)
             "hostname" => conn.config.hostname,
             "runtime" => "julia",
             "runtime_version" => string(VERSION),
-            "agent_version" => "1.0.0",
+            "agent_version" => "0.1.1",
             "environment" => conn.config.environment
         ),
         "timestamp" => round(Int, time() * 1000)

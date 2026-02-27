@@ -19,7 +19,7 @@ end
 
 function AgentConfig(;
     api_key::String = get(ENV, "AIVORY_API_KEY", ""),
-    backend_url::String = get(ENV, "AIVORY_BACKEND_URL", "wss://api.aivory.net/ws/agent"),
+    backend_url::String = get(ENV, "AIVORY_BACKEND_URL", "wss://api.aivory.net/monitor/agent"),
     environment::String = get(ENV, "AIVORY_ENVIRONMENT", "production"),
     sampling_rate::Float64 = parse(Float64, get(ENV, "AIVORY_SAMPLING_RATE", "1.0")),
     max_capture_depth::Int = parse(Int, get(ENV, "AIVORY_MAX_DEPTH", "10")),
