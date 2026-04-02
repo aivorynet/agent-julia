@@ -11,6 +11,8 @@ mutable struct BackendConnection
     message_queue::Vector{String}
     connected::Bool
     receiver_task::Union{Task, Nothing}
+    heartbeat_task::Union{Task, Nothing}
+    heartbeat_running::Bool
 end
 
 function BackendConnection(config::AgentConfig)
@@ -22,7 +24,9 @@ function BackendConnection(config::AgentConfig)
         10,
         String[],
         false,
-        nothing
+        nothing,
+        nothing,
+        false
     )
 end
 
@@ -97,6 +101,9 @@ function disconnect!(conn::BackendConnection)
     conn.connected = false
     conn.authenticated = false
 
+    # Cancel heartbeat task
+    stop_heartbeat!(conn)
+
     if conn.ws !== nothing
         try
             close(conn.ws)
@@ -149,6 +156,21 @@ function send_exception!(conn::BackendConnection, capture::Dict)
     send!(conn, JSON3.write(message))
 end
 
+"""
+    send_breakpoint_hit!(conn::BackendConnection, breakpoint_id::String, data::Dict)
+
+Sends a breakpoint hit event to the backend.
+"""
+function send_breakpoint_hit!(conn::BackendConnection, breakpoint_id::String, data::Dict)
+    payload = Dict{String, Any}()
+    for (k, v) in data
+        payload[string(k)] = v
+    end
+    payload["breakpoint_id"] = breakpoint_id
+    payload["agent_id"] = conn.config.agent_id
+    send!(conn, "breakpoint_hit", payload)
+end
+
 function authenticate!(conn::BackendConnection)
     auth_message = Dict{String, Any}(
         "type" => "register",
@@ -158,7 +180,7 @@ function authenticate!(conn::BackendConnection)
             "hostname" => conn.config.hostname,
             "runtime" => "julia",
             "runtime_version" => string(VERSION),
-            "agent_version" => "0.1.1",
+            "agent_version" => "0.1.2",
             "environment" => conn.config.environment
         ),
         "timestamp" => round(Int, time() * 1000)
@@ -191,15 +213,33 @@ function handle_message!(conn::BackendConnection, data::String)
                 @info "[AIVory Monitor] Agent registered"
             end
             flush_queue!(conn)
+            start_heartbeat!(conn)
         elseif msg_type == "error"
             payload = get(message, :payload, Dict())
+            error_code = get(payload, :code, "")
             @error "[AIVory Monitor] Backend error: $(get(payload, :message, "unknown"))"
+
+            # Auth errors are not recoverable - stop reconnecting
+            if error_code == "auth_error" || error_code == "invalid_api_key"
+                @error "[AIVory Monitor] Authentication failed, disabling reconnect"
+                conn.max_reconnect_attempts = 0
+                disconnect!(conn)
+            end
         end
     catch e
         if conn.config.debug
             @error "[AIVory Monitor] Failed to parse message: $e"
         end
     end
+end
+
+function send!(conn::BackendConnection, msg_type::String, payload::Dict)
+    message = Dict{String, Any}(
+        "type" => msg_type,
+        "payload" => payload,
+        "timestamp" => round(Int, time() * 1000)
+    )
+    send!(conn, JSON3.write(message))
 end
 
 function send!(conn::BackendConnection, message::String)
@@ -240,6 +280,61 @@ function flush_queue!(conn::BackendConnection)
     end
 end
 
+"""
+    start_heartbeat!(conn::BackendConnection)
+
+Starts an async heartbeat task that sends a heartbeat every 30 seconds.
+Cancels any existing heartbeat before starting a new one.
+"""
+function start_heartbeat!(conn::BackendConnection)
+    # Cancel old heartbeat before starting new one
+    stop_heartbeat!(conn)
+
+    conn.heartbeat_running = true
+    conn.heartbeat_task = @async begin
+        try
+            while conn.heartbeat_running && conn.connected
+                sleep(30)
+                if !conn.heartbeat_running || !conn.connected
+                    break
+                end
+                payload = Dict{String, Any}(
+                    "timestamp" => round(Int, time() * 1000),
+                    "agent_id" => conn.config.agent_id
+                )
+                send!(conn, "heartbeat", payload)
+                if conn.config.debug
+                    @info "[AIVory Monitor] Heartbeat sent"
+                end
+            end
+        catch e
+            if conn.config.debug && !(e isa InterruptException)
+                @warn "[AIVory Monitor] Heartbeat error: $e"
+            end
+        end
+    end
+
+    if conn.config.debug
+        @info "[AIVory Monitor] Heartbeat started (30s interval)"
+    end
+end
+
+"""
+    stop_heartbeat!(conn::BackendConnection)
+
+Stops the heartbeat task.
+"""
+function stop_heartbeat!(conn::BackendConnection)
+    conn.heartbeat_running = false
+    if conn.heartbeat_task !== nothing
+        try
+            Base.throwto(conn.heartbeat_task, InterruptException())
+        catch
+        end
+        conn.heartbeat_task = nothing
+    end
+end
+
 function schedule_reconnect!(conn::BackendConnection)
     if conn.reconnect_attempts >= conn.max_reconnect_attempts
         if conn.config.debug
@@ -248,7 +343,7 @@ function schedule_reconnect!(conn::BackendConnection)
         return
     end
 
-    delay = min(2^conn.reconnect_attempts, 30)
+    delay = min(2^conn.reconnect_attempts, 60)
     conn.reconnect_attempts += 1
 
     if conn.config.debug
